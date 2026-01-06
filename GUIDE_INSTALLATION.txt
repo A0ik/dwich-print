@@ -1,0 +1,130 @@
+╔══════════════════════════════════════════════════════════════════╗
+║                                                                  ║
+║   🖨️  DWICH62 - GUIDE D'INSTALLATION COMPLET                     ║
+║                                                                  ║
+╚══════════════════════════════════════════════════════════════════╝
+
+========================================
+   ÉTAPE 1: INSTALLER NODE.JS
+========================================
+
+1. Allez sur https://nodejs.org/
+2. Téléchargez la version LTS (ex: 20.x.x)
+3. Installez-le (suivez les étapes, tout par défaut)
+4. Redémarrez l'ordinateur
+
+
+========================================
+   ÉTAPE 2: INSTALLER NGROK (Tunnel)
+========================================
+
+Ngrok permet à Vercel d'envoyer les commandes à votre PC.
+
+1. Allez sur https://ngrok.com/
+2. Créez un compte gratuit
+3. Téléchargez ngrok pour Windows
+4. Décompressez ngrok.exe dans le dossier dwich-printer
+5. Ouvrez un terminal et tapez:
+   
+   ngrok config add-authtoken VOTRE_TOKEN
+   
+   (Le token est sur https://dashboard.ngrok.com/get-started/your-authtoken)
+
+
+========================================
+   ÉTAPE 3: INSTALLER LE SERVEUR
+========================================
+
+1. Ouvrez le dossier "dwich-printer"
+2. Double-cliquez sur "install.bat"
+3. Attendez que ça finisse
+
+
+========================================
+   ÉTAPE 4: DÉMARRER LE SERVICE
+========================================
+
+Vous devez ouvrir 2 fenêtres:
+
+FENÊTRE 1 - Serveur d'impression:
+   Double-cliquez sur "start.bat"
+   
+FENÊTRE 2 - Tunnel ngrok:
+   Ouvrez un terminal (cmd) dans le dossier
+   Tapez: ngrok http 3333
+   
+   Vous verrez une URL comme:
+   https://abc123.ngrok.io
+   
+   COPIEZ CETTE URL !
+
+
+========================================
+   ÉTAPE 5: CONFIGURER VERCEL
+========================================
+
+Allez dans Vercel > Settings > Environment Variables
+
+Ajoutez ces 2 variables:
+
+   PRINTER_URL = https://abc123.ngrok.io
+   PRINTER_SECRET = dwich62-secret-2024
+
+Puis faites un Redeploy.
+
+
+========================================
+   ÉTAPE 6: TESTER
+========================================
+
+1. Ouvrez http://localhost:3333/test
+2. 2 tickets devraient s'imprimer!
+
+
+========================================
+   DÉMARRAGE AUTOMATIQUE (Optionnel)
+========================================
+
+Pour que tout démarre avec Windows:
+
+1. Appuyez sur Win+R
+2. Tapez: shell:startup
+3. Créez un fichier "dwich-printer.bat" avec:
+
+   @echo off
+   cd "C:\chemin\vers\dwich-printer"
+   start "" node server.js
+   start "" ngrok http 3333
+
+Note: Avec ngrok gratuit, l'URL change à chaque démarrage.
+Pour une URL fixe, prenez ngrok payant (8$/mois) ou utilisez
+une alternative comme Cloudflare Tunnel (gratuit).
+
+
+========================================
+   PROBLÈMES FRÉQUENTS
+========================================
+
+❌ "L'imprimante n'imprime pas"
+   → Vérifiez que l'imprimante s'appelle exactement "AURES ODP333"
+   → Panneau de configuration > Imprimantes
+   → Si le nom est différent, modifiez PRINTER_NAME dans server.js
+
+❌ "ngrok ne démarre pas"
+   → Vérifiez que vous avez ajouté le authtoken
+   → ngrok config add-authtoken VOTRE_TOKEN
+
+❌ "Vercel ne peut pas contacter le PC"
+   → Vérifiez que ngrok tourne et affiche une URL
+   → Vérifiez que PRINTER_URL dans Vercel est correct
+
+========================================
+   SUPPORT
+========================================
+
+En cas de problème, vérifiez:
+1. Node.js est installé (node --version)
+2. Le serveur tourne (http://localhost:3333)
+3. ngrok affiche une URL https
+4. L'imprimante est allumée et connectée
+
