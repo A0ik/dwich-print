@@ -1,12 +1,11 @@
 /**
- * DWICH62 - Serveur d'impression
- * Tickets compacts, pleine largeur
+ * DWICH62 - Serveur d'impression thermique
+ * Utilise node-thermal-printer pour contrôle total
  */
 
 const express = require('express');
-const { exec } = require('child_process');
-const fs = require('fs');
-const path = require('path');
+const ThermalPrinter = require('node-thermal-printer').printer;
+const PrinterTypes = require('node-thermal-printer').types;
 
 const app = express();
 app.use(express.json());
@@ -45,102 +44,157 @@ async function processQueue() {
 
 function prix(cents) { return (cents / 100).toFixed(2).replace('.', ','); }
 
-function dateHeure(d) {
-  const x = d ? new Date(d) : new Date();
-  return x.toLocaleDateString('fr-FR') + ' ' + x.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
-}
-
 // ============ TICKET CUISINE ============
-function ticketCuisine(order) {
-  let t = '\n';
-  t += '            *** CUISINE ***\n\n';
-  t += order.orderType === 'delivery' ? '              LIVRAISON\n\n' : '             SUR PLACE\n\n';
+async function printCuisine(order) {
+  const printer = new ThermalPrinter({
+    type: PrinterTypes.EPSON,
+    interface: `printer:${PRINTER_NAME}`,
+    width: 48,
+    characterSet: 'FRANCE',
+  });
+
+  printer.alignCenter();
+  printer.setTextSize(1, 1);
+  printer.bold(true);
+  printer.println('CUISINE');
+  printer.bold(false);
+  printer.drawLine();
   
+  printer.setTextSize(1, 1);
+  printer.bold(true);
+  printer.println(order.orderType === 'delivery' ? 'LIVRAISON' : 'SUR PLACE');
+  printer.bold(false);
+  printer.drawLine();
+  
+  printer.alignLeft();
   order.items.forEach(item => {
     const qty = item.quantity || item.qty || 1;
-    t += `${qty}x ${item.name.toUpperCase()}\n`;
+    printer.bold(true);
+    printer.println(`${qty}x ${item.name.toUpperCase()}`);
+    printer.bold(false);
     const desc = item.description || item.options || '';
-    if (desc) desc.split(',').forEach(o => { if(o.trim()) t += `   ${o.trim()}\n`; });
+    if (desc) printer.println(`  ${desc}`);
   });
   
-  t += `\n========== N°${order.orderId} ==========\n\n`;
+  printer.drawLine();
+  printer.alignCenter();
+  printer.setTextSize(1, 1);
+  printer.bold(true);
+  printer.println(`#${order.orderId}`);
+  printer.bold(false);
   
+  printer.alignLeft();
   const nom = `${order.customerInfo?.firstName || ''} ${order.customerInfo?.lastName || ''}`.trim();
-  t += `${nom}  ${order.customerInfo?.phone || ''}\n`;
+  printer.println(`${nom} ${order.customerInfo?.phone || ''}`);
   if (order.orderType === 'delivery') {
-    t += `${order.customerInfo?.address || ''}\n`;
-    t += `${order.customerInfo?.postalCode || ''} ${order.customerInfo?.city || ''}\n`;
+    printer.println(order.customerInfo?.address || '');
+    printer.println(`${order.customerInfo?.postalCode || ''} ${order.customerInfo?.city || ''}`);
   }
-  if (order.customerInfo?.notes) t += `>>> ${order.customerInfo.notes} <<<\n`;
+  if (order.customerInfo?.notes) {
+    printer.bold(true);
+    printer.println(`>>> ${order.customerInfo.notes}`);
+    printer.bold(false);
+  }
   
-  t += '\n\n';
-  return t;
+  printer.cut();
+  
+  try {
+    await printer.execute();
+    return true;
+  } catch (e) {
+    console.error('Erreur cuisine:', e.message);
+    return false;
+  }
 }
 
 // ============ TICKET CAISSE ============
-function ticketCaisse(order) {
-  let t = '\n';
-  t += '               DWICH 62\n';
-  t += '       135 ter Rue Jules Guesde\n';
-  t += '    62800 LIEVIN  07 67 46 95 02\n\n';
-  t += `N°${order.orderId}  ${dateHeure(order.createdAt)}\n\n`;
+async function printCaisse(order) {
+  const printer = new ThermalPrinter({
+    type: PrinterTypes.EPSON,
+    interface: `printer:${PRINTER_NAME}`,
+    width: 48,
+    characterSet: 'FRANCE',
+  });
+
+  printer.alignCenter();
+  printer.bold(true);
+  printer.println('DWICH 62');
+  printer.bold(false);
+  printer.println('135ter Rue Jules Guesde');
+  printer.println('62800 LIEVIN');
+  printer.println('07 67 46 95 02');
+  printer.drawLine();
   
+  printer.bold(true);
+  printer.println(`#${order.orderId}`);
+  printer.bold(false);
+  printer.drawLine();
+  
+  printer.alignLeft();
   let subtotal = 0;
   order.items.forEach(item => {
     const qty = item.quantity || item.qty || 1;
     const p = item.unitPrice || item.price || 0;
-    const tot = p * qty;
-    subtotal += tot;
-    const nom = `${qty}x ${item.name}`;
-    t += `${nom.padEnd(30)}${prix(tot)}\n`;
-    const desc = item.description || item.options || '';
-    if (desc) t += `   ${desc}\n`;
+    subtotal += p * qty;
+    printer.leftRight(`${qty}x ${item.name}`, `${prix(p * qty)}`);
   });
   
   const livr = order.orderType === 'delivery' ? 500 : 0;
-  if (livr) t += `${'Livraison'.padEnd(30)}${prix(livr)}\n`;
+  if (livr) printer.leftRight('Livraison', prix(livr));
   
+  printer.drawLine();
+  printer.alignCenter();
+  printer.setTextSize(1, 1);
+  printer.bold(true);
   const total = order.totalAmount || (subtotal + livr);
-  t += `\n============ TOTAL: ${prix(total)} EUR ============\n\n`;
+  printer.println(`TOTAL: ${prix(total)} EUR`);
+  printer.bold(false);
+  printer.drawLine();
   
   if (order.paymentMethod === 'card' || order.paymentMethod === 'stripe') {
-    t += '             PAYE PAR CB\n';
+    printer.println('PAYE CB');
   } else {
-    t += '           *** A ENCAISSER ***\n';
-    t += order.paymentMethod === 'cash' ? '            ESPECES LIVREUR\n' : '             ESPECES SUR PLACE\n';
+    printer.bold(true);
+    printer.invert(true);
+    printer.println(' A ENCAISSER ');
+    printer.invert(false);
+    printer.bold(false);
   }
   
-  t += '\n';
   if (order.orderType === 'delivery') {
+    printer.drawLine();
+    printer.alignLeft();
     const nom = `${order.customerInfo?.firstName || ''} ${order.customerInfo?.lastName || ''}`.trim();
-    t += `${nom}  ${order.customerInfo?.phone || ''}\n`;
-    t += `${order.customerInfo?.address || ''}\n`;
-    t += `${order.customerInfo?.postalCode || ''} ${order.customerInfo?.city || ''}\n`;
+    printer.println(`${nom} ${order.customerInfo?.phone || ''}`);
+    printer.println(order.customerInfo?.address || '');
+    printer.println(`${order.customerInfo?.postalCode || ''} ${order.customerInfo?.city || ''}`);
   }
-  if (order.customerInfo?.notes) t += `Note: ${order.customerInfo.notes}\n`;
+  if (order.customerInfo?.notes) {
+    printer.bold(true);
+    printer.println(`! ${order.customerInfo.notes}`);
+    printer.bold(false);
+  }
   
-  t += '\n          Merci et a bientot !\n';
-  t += '            www.dwich62.fr\n\n';
-  return t;
-}
-
-// ============ IMPRESSION ============
-async function printText(text) {
-  return new Promise((resolve, reject) => {
-    const f = path.join(__dirname, `t${Date.now()}.txt`);
-    fs.writeFileSync(f, text, 'utf8');
-    exec(`notepad /p "${f}"`, { timeout: 30000 }, (err) => {
-      setTimeout(() => { try { fs.unlinkSync(f); } catch(e){} }, 5000);
-      err ? reject(err) : resolve(true);
-    });
-  });
+  printer.drawLine();
+  printer.alignCenter();
+  printer.println('Merci a bientot!');
+  
+  printer.cut();
+  
+  try {
+    await printer.execute();
+    return true;
+  } catch (e) {
+    console.error('Erreur caisse:', e.message);
+    return false;
+  }
 }
 
 async function printOrder(order) {
   console.log(`[${new Date().toLocaleTimeString()}] #${order.orderId}...`);
-  await printText(ticketCuisine(order));
-  await new Promise(r => setTimeout(r, 2000));
-  await printText(ticketCaisse(order));
+  await printCuisine(order);
+  await new Promise(r => setTimeout(r, 1000));
+  await printCaisse(order);
   console.log(`[${new Date().toLocaleTimeString()}] #${order.orderId} OK`);
 }
 
@@ -159,20 +213,19 @@ app.get('/health', (req, res) => res.json({ status: 'ok', queue: printQueue.leng
 app.get('/test', async (req, res) => {
   const id = Date.now().toString().slice(-4);
   const order = {
-    orderId: id, orderType: 'delivery', paymentMethod: 'cash', totalAmount: 2700,
+    orderId: id, orderType: 'delivery', paymentMethod: 'cash', totalAmount: 2200,
     createdAt: new Date().toISOString(),
     items: [
-      { name: 'Tacos 2 viandes', quantity: 1, unitPrice: 1100, description: 'Merguez, Cordon bleu' },
-      { name: 'Double Woping', quantity: 1, unitPrice: 1000, description: 'Hannibal, Nature' },
-      { name: 'Coca 33cl', quantity: 1, unitPrice: 100 },
+      { name: 'Tacos XL', quantity: 1, unitPrice: 1100, description: 'Merguez, Cordon bleu' },
+      { name: 'Coca 33cl', quantity: 2, unitPrice: 250 },
     ],
     customerInfo: { 
-      firstName: 'Mohamed', lastName: 'Dupont', phone: '06 12 34 56 78',
+      firstName: 'Mohamed', lastName: 'D', phone: '0612345678',
       address: '15 Rue de la Paix', postalCode: '62800', city: 'Lievin', 
-      notes: 'Digicode 1234' 
+      notes: 'Code 1234' 
     }
   };
-  if (alreadyPrinted(id)) return res.send('Doublon');
+  if (alreadyPrinted(id)) return res.send('Doublon - relance serveur');
   const ok = await addToQueue(order);
   res.send(ok ? 'OK!' : 'ERREUR');
 });
