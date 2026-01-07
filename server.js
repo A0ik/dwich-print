@@ -1,6 +1,6 @@
 /**
  * DWICH62 - Serveur d'impression automatique
- * Version avec polling Firebase/Supabase-free (utilise un fichier JSON en ligne)
+ * Tickets professionnels - Économie de papier
  */
 
 const express = require('express');
@@ -11,110 +11,100 @@ const path = require('path');
 const app = express();
 app.use(express.json());
 
-// Configuration
 const PRINTER_NAME = 'AURES ODP333';
 const PORT = 3333;
 const SECRET_KEY = process.env.PRINTER_SECRET || 'dwich62-secret-2024';
 
-// File pour stocker les commandes en attente (mode local)
-const PENDING_FILE = path.join(__dirname, 'pending_orders.json');
-
-// ============ GÉNÉRATION DES TICKETS ============
-
+// ============ TICKET CUISINE (sans prix) ============
 function generateKitchenTicket(order) {
   const lines = [];
-  const width = 42;
-  const center = (text) => ' '.repeat(Math.max(0, Math.floor((width - text.length) / 2))) + text;
-  const line = () => '='.repeat(width);
-  const dashed = () => '-'.repeat(width);
+  const w = 42;
+  const center = (t) => ' '.repeat(Math.max(0, Math.floor((w - t.length) / 2))) + t;
+  const sep = () => '-'.repeat(w);
 
-  lines.push(line());
-  lines.push(center('DWICH62 - CUISINE'));
-  lines.push(line());
-  lines.push('');
-  lines.push(center(`COMMANDE #${order.orderId}`));
-  lines.push(center(formatDate(order.createdAt)));
-  lines.push('');
-  lines.push(dashed());
+  lines.push(center('*** CUISINE ***'));
+  lines.push(sep());
+  lines.push(center(`#${order.orderId}`));
+  lines.push(center(formatTime(order.createdAt)));
+  lines.push(sep());
   
-  const modeIcon = order.orderType === 'delivery' ? '>>> LIVRAISON <<<' : '>>> SUR PLACE <<<';
-  lines.push(center(modeIcon));
-  lines.push(dashed());
-  lines.push('');
+  // Mode
+  const mode = order.orderType === 'delivery' ? 'LIVRAISON' : 'SUR PLACE';
+  lines.push(center(`>> ${mode} <<`));
+  lines.push(sep());
 
-  // Produits SANS PRIX
+  // Produits
   order.items.forEach(item => {
-    lines.push(`  ${item.quantity || item.qty}x ${item.name}`);
+    const qty = item.quantity || item.qty || 1;
+    lines.push(`${qty}x ${item.name}`);
     const desc = item.description || item.options || '';
     if (desc) {
       desc.split(',').forEach(opt => {
-        if (opt.trim()) lines.push(`     -> ${opt.trim()}`);
+        if (opt.trim()) lines.push(`   > ${opt.trim()}`);
       });
     }
-    lines.push('');
   });
 
-  lines.push(dashed());
+  lines.push(sep());
 
+  // Notes
   if (order.customerInfo?.notes || order.notes) {
-    lines.push('');
-    lines.push(`  NOTES: ${order.customerInfo?.notes || order.notes}`);
-    lines.push('');
+    lines.push(`NOTE: ${order.customerInfo?.notes || order.notes}`);
+    lines.push(sep());
   }
 
-  lines.push(dashed());
-  const firstName = order.customerInfo?.firstName || order.customerName?.split(' ')[0] || '';
-  const lastName = order.customerInfo?.lastName || order.customerName?.split(' ')[1] || '';
+  // Client
+  const name = `${order.customerInfo?.firstName || ''} ${order.customerInfo?.lastName || ''}`.trim();
   const phone = order.customerInfo?.phone || order.customerPhone || '';
-  
-  lines.push(`  Client: ${firstName} ${lastName}`);
-  lines.push(`  Tel: ${phone}`);
+  lines.push(`Client: ${name}`);
+  lines.push(`Tel: ${phone}`);
   
   if (order.orderType === 'delivery') {
-    const address = order.customerInfo?.address || order.customerAddress || '';
-    const postal = order.customerInfo?.postalCode || '';
+    const addr = order.customerInfo?.address || '';
+    const cp = order.customerInfo?.postalCode || '';
     const city = order.customerInfo?.city || '';
-    lines.push('');
-    lines.push(`  ADRESSE:`);
-    if (address) lines.push(`  ${address}`);
-    if (postal || city) lines.push(`  ${postal} ${city}`);
+    lines.push(`Adr: ${addr}`);
+    lines.push(`     ${cp} ${city}`);
   }
 
+  lines.push(sep());
   lines.push('');
-  lines.push(line());
-  lines.push('\n\n\n');
+  lines.push('');
 
   return lines.join('\n');
 }
 
+// ============ TICKET CAISSE (professionnel) ============
 function generateCashierTicket(order) {
   const lines = [];
-  const width = 42;
-  const center = (text) => ' '.repeat(Math.max(0, Math.floor((width - text.length) / 2))) + text;
-  const line = () => '='.repeat(width);
-  const dashed = () => '-'.repeat(width);
-  const priceRow = (label, price) => {
-    const priceStr = formatPrice(price);
-    const spaces = Math.max(1, width - label.length - priceStr.length);
-    return label + ' '.repeat(spaces) + priceStr;
+  const w = 42;
+  const center = (t) => ' '.repeat(Math.max(0, Math.floor((w - t.length) / 2))) + t;
+  const sep = () => '-'.repeat(w);
+  const doubleSep = () => '='.repeat(w);
+  const rightAlign = (label, value) => {
+    const spaces = Math.max(1, w - label.length - value.length);
+    return label + ' '.repeat(spaces) + value;
   };
 
-  lines.push(line());
+  // En-tête
+  lines.push(doubleSep());
   lines.push(center('DWICH62'));
   lines.push(center('135 Ter Rue Jules Guesde'));
-  lines.push(center('62800 Lievin'));
+  lines.push(center('62800 LIEVIN'));
   lines.push(center('Tel: 07 67 46 95 02'));
-  lines.push(line());
+  lines.push(doubleSep());
+  
+  // Infos commande
   lines.push('');
-  lines.push(center(`COMMANDE #${order.orderId}`));
-  lines.push(center(formatDate(order.createdAt)));
+  lines.push(rightAlign('Commande:', `#${order.orderId}`));
+  lines.push(rightAlign('Date:', formatDate(order.createdAt)));
+  lines.push(rightAlign('Heure:', formatTime(order.createdAt)));
+  lines.push(rightAlign('Mode:', order.orderType === 'delivery' ? 'Livraison' : 'Sur place'));
   lines.push('');
-  lines.push(dashed());
-  lines.push(center(order.orderType === 'delivery' ? '>>> LIVRAISON <<<' : '>>> SUR PLACE <<<'));
-  lines.push(dashed());
-  lines.push('');
+  lines.push(sep());
 
-  // Produits AVEC PRIX
+  // Produits
+  lines.push('');
   let subtotal = 0;
   order.items.forEach(item => {
     const qty = item.quantity || item.qty || 1;
@@ -122,236 +112,185 @@ function generateCashierTicket(order) {
     const itemTotal = price * qty;
     subtotal += itemTotal;
     
-    lines.push(priceRow(`${qty}x ${item.name}`, itemTotal));
+    lines.push(rightAlign(`${qty}x ${item.name}`, formatPrice(itemTotal)));
     const desc = item.description || item.options || '';
     if (desc) {
       lines.push(`   ${desc.substring(0, 38)}`);
     }
   });
-
   lines.push('');
-  lines.push(dashed());
-  lines.push(priceRow('Sous-total', subtotal));
+  lines.push(sep());
+
+  // Totaux
+  lines.push(rightAlign('Sous-total:', formatPrice(subtotal)));
   
   const deliveryFee = order.orderType === 'delivery' ? 500 : 0;
   if (deliveryFee > 0) {
-    lines.push(priceRow('Livraison', deliveryFee));
+    lines.push(rightAlign('Livraison:', formatPrice(deliveryFee)));
   }
   
-  lines.push(dashed());
-  lines.push('');
-  
+  lines.push(sep());
   const total = order.totalAmount || order.total || (subtotal + deliveryFee);
-  lines.push(center(`TOTAL: ${formatPrice(total)}`));
   lines.push('');
-  lines.push(dashed());
-  
-  // MODE DE PAIEMENT DÉTAILLÉ
+  lines.push(rightAlign('TOTAL EUR:', formatPrice(total)));
+  lines.push('');
+  lines.push(doubleSep());
+
+  // Mode de paiement
   lines.push('');
   if (order.paymentMethod === 'card' || order.paymentMethod === 'stripe') {
-    lines.push(center('*** PAYE PAR CARTE ***'));
-    lines.push(center('Paiement Stripe recu'));
+    lines.push(center('PAYE PAR CARTE BANCAIRE'));
   } else if (order.paymentMethod === 'cash') {
-    lines.push(center('!!! A ENCAISSER !!!'));
+    lines.push(center('** A ENCAISSER **'));
     lines.push(center('ESPECES AU LIVREUR'));
-    lines.push('');
-    lines.push(center(`Montant: ${formatPrice(total)}`));
   } else {
-    lines.push(center('!!! A ENCAISSER !!!'));
+    lines.push(center('** A ENCAISSER **'));
     lines.push(center('PAIEMENT SUR PLACE'));
-    lines.push('');
-    lines.push(center(`Montant: ${formatPrice(total)}`));
   }
   lines.push('');
-  
-  // INFOS CLIENT
-  lines.push(dashed());
-  lines.push('  CLIENT:');
-  const firstName = order.customerInfo?.firstName || order.customerName?.split(' ')[0] || '';
-  const lastName = order.customerInfo?.lastName || order.customerName?.split(' ')[1] || '';
+  lines.push(sep());
+
+  // Infos client
+  lines.push('');
+  const name = `${order.customerInfo?.firstName || ''} ${order.customerInfo?.lastName || ''}`.trim();
   const phone = order.customerInfo?.phone || order.customerPhone || '';
-  const email = order.customerInfo?.email || order.customerEmail || '';
+  lines.push(`Client: ${name}`);
+  lines.push(`Tel: ${phone}`);
   
-  lines.push(`  Nom: ${firstName} ${lastName}`);
-  lines.push(`  Tel: ${phone}`);
-  if (email) lines.push(`  Email: ${email}`);
-  
-  // ADRESSE LIVRAISON (si livraison)
+  // Adresse si livraison
   if (order.orderType === 'delivery') {
     lines.push('');
-    lines.push(dashed());
-    lines.push('  ADRESSE LIVRAISON:');
-    const address = order.customerInfo?.address || order.customerAddress || '';
-    const postal = order.customerInfo?.postalCode || '';
+    lines.push('Adresse de livraison:');
+    const addr = order.customerInfo?.address || '';
+    const cp = order.customerInfo?.postalCode || '';
     const city = order.customerInfo?.city || '';
-    if (address) lines.push(`  ${address}`);
-    if (postal || city) lines.push(`  ${postal} ${city}`);
+    lines.push(`${addr}`);
+    lines.push(`${cp} ${city}`);
   }
-  
-  // NOTES
+
+  // Notes
   if (order.customerInfo?.notes || order.notes) {
     lines.push('');
-    lines.push(dashed());
-    lines.push(`  NOTES: ${order.customerInfo?.notes || order.notes}`);
+    lines.push(`Note: ${order.customerInfo?.notes || order.notes}`);
   }
 
   lines.push('');
-  lines.push(line());
+  lines.push(doubleSep());
   lines.push(center('Merci de votre visite !'));
-  lines.push(line());
-  lines.push('\n\n\n');
+  lines.push(center('www.dwich62.fr'));
+  lines.push(doubleSep());
+  lines.push('');
+  lines.push('');
 
   return lines.join('\n');
 }
 
 function formatPrice(cents) {
-  return (cents / 100).toFixed(2).replace('.', ',') + ' EUR';
+  return (cents / 100).toFixed(2).replace('.', ',');
 }
 
 function formatDate(dateStr) {
   const d = dateStr ? new Date(dateStr) : new Date();
-  return d.toLocaleString('fr-FR', { 
-    day: '2-digit', month: '2-digit', year: 'numeric',
-    hour: '2-digit', minute: '2-digit'
-  });
+  return d.toLocaleDateString('fr-FR');
 }
 
-// ============ IMPRESSION WINDOWS ============
+function formatTime(dateStr) {
+  const d = dateStr ? new Date(dateStr) : new Date();
+  return d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+}
 
+// ============ IMPRESSION ============
 async function printText(text) {
   return new Promise((resolve, reject) => {
     const tempFile = path.join(__dirname, `ticket_${Date.now()}.txt`);
-    
-    // Convertir en encodage Windows
     fs.writeFileSync(tempFile, text, { encoding: 'latin1' });
     
-    // Méthode 1: Impression directe via PowerShell
     const cmd = `powershell -Command "Get-Content '${tempFile}' | Out-Printer '${PRINTER_NAME}'"`;
     
-    exec(cmd, { timeout: 10000 }, (error, stdout, stderr) => {
-      // Nettoyer
-      setTimeout(() => {
-        try { fs.unlinkSync(tempFile); } catch (e) {}
-      }, 1000);
-      
-      if (error) {
-        console.error('Erreur PowerShell, tentative alternative...');
-        // Méthode 2: Via notepad (fallback)
-        exec(`notepad /p "${tempFile}"`, (err2) => {
-          if (err2) reject(err2);
-          else resolve(true);
-        });
-      } else {
-        resolve(true);
-      }
+    exec(cmd, { timeout: 15000 }, (error) => {
+      setTimeout(() => { try { fs.unlinkSync(tempFile); } catch (e) {} }, 1000);
+      if (error) reject(error);
+      else resolve(true);
     });
   });
 }
 
 async function printOrder(order) {
-  console.log(`\n${'='.repeat(50)}`);
-  console.log(`📦 IMPRESSION COMMANDE #${order.orderId}`);
-  console.log(`${'='.repeat(50)}`);
+  console.log(`\n${'='.repeat(40)}`);
+  console.log(`COMMANDE #${order.orderId}`);
+  console.log(`${'='.repeat(40)}`);
   
   try {
-    const kitchenTicket = generateKitchenTicket(order);
-    const cashierTicket = generateCashierTicket(order);
+    // Ticket CUISINE
+    console.log('Impression CUISINE...');
+    await printText(generateKitchenTicket(order));
     
-    console.log('🖨️  Ticket CUISINE...');
-    await printText(kitchenTicket);
+    await new Promise(r => setTimeout(r, 300));
     
-    // Petit délai entre les impressions
-    await new Promise(r => setTimeout(r, 500));
+    // Ticket CAISSE
+    console.log('Impression CAISSE...');
+    await printText(generateCashierTicket(order));
     
-    console.log('🖨️  Ticket CAISSE...');
-    await printText(cashierTicket);
-    
-    console.log('✅ Impression terminée!\n');
+    console.log('OK!\n');
     return true;
   } catch (error) {
-    console.error('❌ Erreur:', error.message);
+    console.error('ERREUR:', error.message);
     return false;
   }
 }
 
-// ============ API ENDPOINTS ============
-
-// Recevoir une commande à imprimer
+// ============ API ============
 app.post('/print', async (req, res) => {
   const { secret, order } = req.body;
-  
-  if (secret !== SECRET_KEY) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
-  
-  if (!order) {
-    return res.status(400).json({ error: 'Missing order' });
-  }
+  if (secret !== SECRET_KEY) return res.status(401).json({ error: 'Unauthorized' });
+  if (!order) return res.status(400).json({ error: 'Missing order' });
   
   const success = await printOrder(order);
   res.json({ success, orderId: order.orderId });
 });
 
-// Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', printer: PRINTER_NAME });
 });
 
-// Test
 app.get('/test', async (req, res) => {
   const testOrder = {
     orderId: 'TEST' + Date.now().toString(36).toUpperCase().slice(-4),
     orderType: 'delivery',
-    paymentMethod: 'card',
-    totalAmount: 2550,
+    paymentMethod: 'cash',
+    totalAmount: 2350,
     createdAt: new Date().toISOString(),
     items: [
-      { name: 'Tacos XL', quantity: 2, unitPrice: 900, description: 'Poulet, Cordon bleu' },
-      { name: 'Burger Classic', quantity: 1, unitPrice: 750 },
+      { name: 'Tacos XL', quantity: 2, unitPrice: 900, description: 'Poulet, Cordon bleu, Algerienne' },
+      { name: 'Coca-Cola', quantity: 1, unitPrice: 250 },
+      { name: 'Frites', quantity: 1, unitPrice: 300 },
     ],
     customerInfo: {
-      firstName: 'Test', lastName: 'Client',
-      phone: '0600000000',
-      address: '123 Rue Test', postalCode: '62800', city: 'Lievin',
-      notes: 'TEST IMPRESSION'
+      firstName: 'Mohamed', lastName: 'Test',
+      phone: '06 12 34 56 78',
+      address: '15 Rue de la Paix', postalCode: '62800', city: 'Lievin',
+      notes: 'Digicode 1234'
     }
   };
   
   const success = await printOrder(testOrder);
-  res.json({ success, message: success ? 'Tickets imprimes!' : 'Erreur impression' });
+  res.send(success ? 'OK - Tickets imprimes!' : 'ERREUR - Verifiez l\'imprimante');
 });
 
-// Page d'accueil simple
 app.get('/', (req, res) => {
-  res.send(`
-    <html>
-    <head><title>DWICH62 Printer</title></head>
-    <body style="font-family: Arial; padding: 40px; background: #1a1a1a; color: white;">
-      <h1>🖨️ DWICH62 - Serveur d'impression</h1>
-      <p>Status: <span style="color: #10b981;">● En ligne</span></p>
-      <p>Imprimante: <strong>${PRINTER_NAME}</strong></p>
-      <hr>
-      <a href="/test" style="color: #10b981;">Imprimer un ticket de test</a>
-    </body>
-    </html>
-  `);
+  res.send(`<html><body style="font-family:Arial;padding:40px;background:#111;color:#fff">
+    <h1>DWICH62 - Imprimante</h1>
+    <p>Status: <span style="color:#0f0">EN LIGNE</span></p>
+    <p><a href="/test" style="color:#0f0">Imprimer un test</a></p>
+  </body></html>`);
 });
 
-// ============ DÉMARRAGE ============
-
-app.listen(PORT, '0.0.0.0', () => {
-  console.log(`
-╔══════════════════════════════════════════════════════════╗
-║                                                          ║
-║   🖨️  DWICH62 - Serveur d'impression                     ║
-║                                                          ║
-║   Imprimante: ${PRINTER_NAME.padEnd(38)}  ║
-║   Adresse:    http://localhost:${PORT}                     ║
-║                                                          ║
-║   ✅ Serveur prêt - En attente de commandes...           ║
-║                                                          ║
-║   📋 Test: http://localhost:${PORT}/test                   ║
-║                                                          ║
-╚══════════════════════════════════════════════════════════╝
-  `);
+app.listen(PORT, () => {
+  console.log(`\n${'='.repeat(40)}`);
+  console.log('  DWICH62 - Serveur Impression');
+  console.log(`${'='.repeat(40)}`);
+  console.log(`  Imprimante: ${PRINTER_NAME}`);
+  console.log(`  Port: ${PORT}`);
+  console.log(`  Test: http://localhost:${PORT}/test`);
+  console.log(`${'='.repeat(40)}\n`);
 });
