@@ -49,7 +49,6 @@ const CMD = {
 };
 
 const LINE = '-'.repeat(42);
-const DLINE = '='.repeat(42);
 const ULINE = '_'.repeat(42);
 
 // ============ HELPERS ============
@@ -303,14 +302,92 @@ function generateCashierTicket(order) {
   return t;
 }
 
-// ============ IMPRESSION ============
+// ============ IMPRESSION VIA POWERSHELL ============
 async function printRaw(data) {
   return new Promise((resolve, reject) => {
-    const f = path.join(__dirname, `t_${Date.now()}.bin`);
+    const f = path.join(__dirname, `ticket_${Date.now()}.bin`);
     fs.writeFileSync(f, data, 'binary');
-    exec(`copy /b "${f}" "\\\\%COMPUTERNAME%\\${PRINTER_NAME}"`, { shell: 'cmd.exe' }, (err) => {
-      setTimeout(() => { try { fs.unlinkSync(f); } catch(e){} }, 500);
-      err ? reject(err) : resolve(true);
+    
+    // Méthode PowerShell - fonctionne sans partage réseau
+    const ps = `
+      $printerName = '${PRINTER_NAME}'
+      $filePath = '${f.replace(/\\/g, '\\\\')}'
+      
+      Add-Type -AssemblyName System.Drawing
+      
+      $bytes = [System.IO.File]::ReadAllBytes($filePath)
+      
+      $printer = New-Object System.Drawing.Printing.PrintDocument
+      $printer.PrinterSettings.PrinterName = $printerName
+      
+      # Envoi direct via RawPrinterHelper
+      $signature = @'
+      [DllImport("winspool.drv", CharSet=CharSet.Auto, SetLastError=true)]
+      public static extern bool OpenPrinter(string pPrinterName, out IntPtr phPrinter, IntPtr pDefault);
+      [DllImport("winspool.drv", SetLastError=true)]
+      public static extern bool ClosePrinter(IntPtr hPrinter);
+      [DllImport("winspool.drv", SetLastError=true)]
+      public static extern bool StartDocPrinter(IntPtr hPrinter, int Level, ref DOCINFO pDocInfo);
+      [DllImport("winspool.drv", SetLastError=true)]
+      public static extern bool EndDocPrinter(IntPtr hPrinter);
+      [DllImport("winspool.drv", SetLastError=true)]
+      public static extern bool StartPagePrinter(IntPtr hPrinter);
+      [DllImport("winspool.drv", SetLastError=true)]
+      public static extern bool EndPagePrinter(IntPtr hPrinter);
+      [DllImport("winspool.drv", SetLastError=true)]
+      public static extern bool WritePrinter(IntPtr hPrinter, IntPtr pBytes, int dwCount, out int dwWritten);
+      
+      [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Auto)]
+      public struct DOCINFO {
+        [MarshalAs(UnmanagedType.LPTStr)] public string pDocName;
+        [MarshalAs(UnmanagedType.LPTStr)] public string pOutputFile;
+        [MarshalAs(UnmanagedType.LPTStr)] public string pDataType;
+      }
+'@
+      
+      Add-Type -MemberDefinition $signature -Name RawPrinter -Namespace Win32
+      
+      $hPrinter = [IntPtr]::Zero
+      [Win32.RawPrinter]::OpenPrinter($printerName, [ref]$hPrinter, [IntPtr]::Zero) | Out-Null
+      
+      $docInfo = New-Object Win32.RawPrinter+DOCINFO
+      $docInfo.pDocName = "DWICH62 Ticket"
+      $docInfo.pDataType = "RAW"
+      
+      [Win32.RawPrinter]::StartDocPrinter($hPrinter, 1, [ref]$docInfo) | Out-Null
+      [Win32.RawPrinter]::StartPagePrinter($hPrinter) | Out-Null
+      
+      $unmanagedBytes = [System.Runtime.InteropServices.Marshal]::AllocHGlobal($bytes.Length)
+      [System.Runtime.InteropServices.Marshal]::Copy($bytes, 0, $unmanagedBytes, $bytes.Length)
+      
+      $written = 0
+      [Win32.RawPrinter]::WritePrinter($hPrinter, $unmanagedBytes, $bytes.Length, [ref]$written) | Out-Null
+      
+      [System.Runtime.InteropServices.Marshal]::FreeHGlobal($unmanagedBytes)
+      
+      [Win32.RawPrinter]::EndPagePrinter($hPrinter) | Out-Null
+      [Win32.RawPrinter]::EndDocPrinter($hPrinter) | Out-Null
+      [Win32.RawPrinter]::ClosePrinter($hPrinter) | Out-Null
+      
+      Write-Output "OK"
+    `;
+    
+    const psFile = path.join(__dirname, `print_${Date.now()}.ps1`);
+    fs.writeFileSync(psFile, ps);
+    
+    exec(`powershell -ExecutionPolicy Bypass -File "${psFile}"`, { timeout: 30000 }, (err, stdout, stderr) => {
+      // Nettoyer les fichiers
+      setTimeout(() => {
+        try { fs.unlinkSync(f); } catch(e){}
+        try { fs.unlinkSync(psFile); } catch(e){}
+      }, 1000);
+      
+      if (err) {
+        console.error('Erreur PowerShell:', stderr || err.message);
+        reject(err);
+      } else {
+        resolve(true);
+      }
     });
   });
 }
@@ -318,7 +395,7 @@ async function printRaw(data) {
 async function printOrder(order) {
   console.log(`[${new Date().toLocaleTimeString()}] #${order.orderId}...`);
   await printRaw(generateKitchenTicket(order));
-  await new Promise(r => setTimeout(r, 800));
+  await new Promise(r => setTimeout(r, 1000));
   await printRaw(generateCashierTicket(order));
   console.log(`[${new Date().toLocaleTimeString()}] #${order.orderId} OK`);
 }
@@ -354,11 +431,31 @@ app.get('/test', async (req, res) => {
       notes: 'Digicode 1234' 
     }
   };
-  if (alreadyPrinted(id)) return res.send('Doublon');
+  if (alreadyPrinted(id)) return res.send('Doublon - Relance le serveur pour retester');
   const ok = await addToQueue(order);
-  res.send(ok ? 'OK!' : 'ERREUR');
+  res.send(ok ? 'OK - Tickets imprimes!' : 'ERREUR');
 });
 
-app.get('/', (req, res) => res.send(`<h1>DWICH62</h1><a href="/test">TEST</a>`));
+app.get('/', (req, res) => res.send(`
+  <html>
+  <body style="font-family:Arial;padding:40px;background:#1a1a1a;color:white;text-align:center">
+    <h1>🖨️ DWICH62 Printer</h1>
+    <p style="color:#10b981">● EN LIGNE</p>
+    <p>Imprimante: ${PRINTER_NAME}</p>
+    <br>
+    <a href="/test" style="background:#10b981;color:white;padding:15px 30px;text-decoration:none;border-radius:8px;font-size:18px">IMPRIMER UN TEST</a>
+  </body>
+  </html>
+`));
 
-app.listen(PORT, () => console.log(`DWICH62 Printer - Port ${PORT}`));
+app.listen(PORT, () => {
+  console.log('');
+  console.log('================================');
+  console.log('  DWICH62 - Serveur Impression');
+  console.log('================================');
+  console.log(`  Imprimante: ${PRINTER_NAME}`);
+  console.log(`  Port: ${PORT}`);
+  console.log(`  Test: http://localhost:${PORT}/test`);
+  console.log('================================');
+  console.log('');
+});
