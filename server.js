@@ -1,6 +1,6 @@
 /**
  * DWICH62 - Serveur d'impression
- * Méthode simple avec fichier texte
+ * Tickets compacts, pleine largeur
  */
 
 const express = require('express');
@@ -15,21 +15,14 @@ const PRINTER_NAME = 'AURES ODP333';
 const PORT = 3333;
 const SECRET_KEY = process.env.PRINTER_SECRET || 'dwich62-secret-2024';
 
-// Anti-doublons
 const printedOrders = new Set();
-const MAX_HISTORY = 100;
-
-// File d'attente
 let printQueue = [];
 let isPrinting = false;
 
-// ============ HELPERS ============
 function alreadyPrinted(orderId) {
   if (printedOrders.has(orderId)) return true;
   printedOrders.add(orderId);
-  if (printedOrders.size > MAX_HISTORY) {
-    printedOrders.delete(printedOrders.values().next().value);
-  }
+  if (printedOrders.size > 100) printedOrders.delete(printedOrders.values().next().value);
   return false;
 }
 
@@ -44,211 +37,110 @@ async function processQueue() {
   if (isPrinting || printQueue.length === 0) return;
   isPrinting = true;
   const { order, resolve } = printQueue.shift();
-  try {
-    await printOrder(order);
-    resolve(true);
-  } catch (e) {
-    console.error('Erreur:', e.message);
-    resolve(false);
-  }
+  try { await printOrder(order); resolve(true); } 
+  catch (e) { console.error('Erreur:', e.message); resolve(false); }
   isPrinting = false;
   processQueue();
 }
 
-function formatPrice(cents) {
-  return (cents / 100).toFixed(2).replace('.', ',') + ' EUR';
-}
+function prix(cents) { return (cents / 100).toFixed(2).replace('.', ','); }
 
-function formatDate(d) {
-  const date = d ? new Date(d) : new Date();
-  const jours = ['dimanche', 'lundi', 'mardi', 'mercredi', 'jeudi', 'vendredi', 'samedi'];
-  const mois = ['janvier', 'fevrier', 'mars', 'avril', 'mai', 'juin', 'juillet', 'aout', 'septembre', 'octobre', 'novembre', 'decembre'];
-  return `${jours[date.getDay()]} ${date.getDate()} ${mois[date.getMonth()]} ${date.getFullYear()}`;
+function dateHeure(d) {
+  const x = d ? new Date(d) : new Date();
+  return x.toLocaleDateString('fr-FR') + ' ' + x.toLocaleTimeString('fr-FR', {hour:'2-digit', minute:'2-digit'});
 }
-
-function formatTime(d) {
-  return (d ? new Date(d) : new Date()).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
-}
-
-function rightAlign(left, right, width = 42) {
-  const spaces = Math.max(1, width - left.length - right.length);
-  return left + ' '.repeat(spaces) + right;
-}
-
-const LINE = '-'.repeat(42);
-const ULINE = '_'.repeat(42);
 
 // ============ TICKET CUISINE ============
-function generateKitchenTicket(order) {
-  let t = '';
+function ticketCuisine(order) {
+  let t = '\n';
+  t += '            *** CUISINE ***\n\n';
+  t += order.orderType === 'delivery' ? '              LIVRAISON\n\n' : '             SUR PLACE\n\n';
   
-  t += LINE + '\n';
-  t += '              CUISINE\n';
-  t += LINE + '\n';
-  
-  if (order.orderType === 'delivery') {
-    t += '             LIVRAISON\n';
-  } else {
-    t += '            A EMPORTER\n';
-  }
-  t += LINE + '\n';
-  t += '            A PREPARER\n';
-  t += LINE + '\n\n';
-  
-  // Produits
   order.items.forEach(item => {
     const qty = item.quantity || item.qty || 1;
-    t += `${qty} ${item.name.toUpperCase()}\n`;
-    
+    t += `${qty}x ${item.name.toUpperCase()}\n`;
     const desc = item.description || item.options || '';
-    if (desc) {
-      desc.split(',').forEach(o => {
-        if (o.trim()) t += `      ${o.trim().toUpperCase()}\n`;
-      });
-    }
+    if (desc) desc.split(',').forEach(o => { if(o.trim()) t += `   ${o.trim()}\n`; });
   });
   
-  t += '\n' + LINE + '\n\n';
+  t += `\n========== N°${order.orderId} ==========\n\n`;
   
-  t += `         TICKET N: ${order.orderId}\n`;
-  
-  if (order.customerInfo?.notes || order.notes) {
-    t += `(${order.customerInfo?.notes || order.notes})\n`;
-  }
-  
-  t += '\n';
-  const name = `${order.customerInfo?.firstName || ''} ${order.customerInfo?.lastName || ''}`.trim();
-  t += `${formatDate(order.createdAt)} a ${formatTime(order.createdAt)}\n`;
-  t += `Client: ${name}\n`;
-  t += `Tel: ${order.customerInfo?.phone || ''}\n`;
-  
+  const nom = `${order.customerInfo?.firstName || ''} ${order.customerInfo?.lastName || ''}`.trim();
+  t += `${nom}  ${order.customerInfo?.phone || ''}\n`;
   if (order.orderType === 'delivery') {
     t += `${order.customerInfo?.address || ''}\n`;
     t += `${order.customerInfo?.postalCode || ''} ${order.customerInfo?.city || ''}\n`;
   }
+  if (order.customerInfo?.notes) t += `>>> ${order.customerInfo.notes} <<<\n`;
   
-  t += '\n\n\n';
-  
+  t += '\n\n';
   return t;
 }
 
 // ============ TICKET CAISSE ============
-function generateCashierTicket(order) {
-  let t = '';
+function ticketCaisse(order) {
+  let t = '\n';
+  t += '               DWICH 62\n';
+  t += '       135 ter Rue Jules Guesde\n';
+  t += '    62800 LIEVIN  07 67 46 95 02\n\n';
+  t += `N°${order.orderId}  ${dateHeure(order.createdAt)}\n\n`;
   
-  t += '\n';
-  t += '             DWICH 62\n';
-  t += '     135 ter Rue Jules Guesde\n';
-  t += '          62800 LIEVIN\n';
-  t += '        07 67 46 95 02\n';
-  t += LINE + '\n';
-  t += `${formatDate(order.createdAt)}  ${formatTime(order.createdAt)}\n`;
-  t += LINE + '\n';
-  
-  t += `TICKET N: ${order.orderId}\n`;
-  t += ULINE + '\n';
-  
-  // Produits
   let subtotal = 0;
   order.items.forEach(item => {
     const qty = item.quantity || item.qty || 1;
-    const price = item.unitPrice || item.price || 0;
-    const tot = price * qty;
+    const p = item.unitPrice || item.price || 0;
+    const tot = p * qty;
     subtotal += tot;
-    
-    t += rightAlign(`${qty} ${item.name.toUpperCase()}`, formatPrice(tot)) + '\n';
-    
+    const nom = `${qty}x ${item.name}`;
+    t += `${nom.padEnd(30)}${prix(tot)}\n`;
     const desc = item.description || item.options || '';
-    if (desc) {
-      desc.split(',').forEach(o => {
-        if (o.trim()) t += `      ${o.trim().toUpperCase()}\n`;
-      });
-    }
+    if (desc) t += `   ${desc}\n`;
   });
   
-  t += ULINE + '\n';
+  const livr = order.orderType === 'delivery' ? 500 : 0;
+  if (livr) t += `${'Livraison'.padEnd(30)}${prix(livr)}\n`;
   
-  const deliveryFee = order.orderType === 'delivery' ? 500 : 0;
-  if (deliveryFee > 0) {
-    t += rightAlign('LIVRAISON', formatPrice(deliveryFee)) + '\n';
-    t += ULINE + '\n';
-  }
-  
-  const total = order.totalAmount || (subtotal + deliveryFee);
-  t += '\n';
-  t += `          TOTAL: ${formatPrice(total)}\n`;
-  t += '\n' + LINE + '\n';
+  const total = order.totalAmount || (subtotal + livr);
+  t += `\n============ TOTAL: ${prix(total)} EUR ============\n\n`;
   
   if (order.paymentMethod === 'card' || order.paymentMethod === 'stripe') {
-    t += rightAlign('Carte Bancaire', formatPrice(total)) + '\n';
-  } else if (order.paymentMethod === 'cash') {
-    t += '       A ENCAISSER - LIVREUR\n';
-    t += rightAlign('Especes', formatPrice(total)) + '\n';
+    t += '             PAYE PAR CB\n';
   } else {
-    t += '      A ENCAISSER - SUR PLACE\n';
-    t += rightAlign('Especes', formatPrice(total)) + '\n';
+    t += '           *** A ENCAISSER ***\n';
+    t += order.paymentMethod === 'cash' ? '            ESPECES LIVREUR\n' : '             ESPECES SUR PLACE\n';
   }
   
-  t += LINE + '\n';
-  
+  t += '\n';
   if (order.orderType === 'delivery') {
-    t += '            LIVRAISON\n\n';
-    const name = `${order.customerInfo?.firstName || ''} ${order.customerInfo?.lastName || ''}`.trim();
-    t += `Client: ${name}\n`;
-    t += `Tel: ${order.customerInfo?.phone || ''}\n`;
+    const nom = `${order.customerInfo?.firstName || ''} ${order.customerInfo?.lastName || ''}`.trim();
+    t += `${nom}  ${order.customerInfo?.phone || ''}\n`;
     t += `${order.customerInfo?.address || ''}\n`;
     t += `${order.customerInfo?.postalCode || ''} ${order.customerInfo?.city || ''}\n`;
-  } else {
-    t += '           A EMPORTER\n';
   }
+  if (order.customerInfo?.notes) t += `Note: ${order.customerInfo.notes}\n`;
   
-  if (order.customerInfo?.notes || order.notes) {
-    t += `\nNote: ${order.customerInfo?.notes || order.notes}\n`;
-  }
-  
-  t += '\n';
-  t += '       MERCI DE VOTRE VISITE\n';
-  t += '          A TRES BIENTOT\n';
-  t += '\n';
-  t += '         www.dwich62.fr\n';
-  t += '\n\n\n';
-  
+  t += '\n          Merci et a bientot !\n';
+  t += '            www.dwich62.fr\n\n';
   return t;
 }
 
 // ============ IMPRESSION ============
 async function printText(text) {
   return new Promise((resolve, reject) => {
-    const f = path.join(__dirname, `ticket_${Date.now()}.txt`);
+    const f = path.join(__dirname, `t${Date.now()}.txt`);
     fs.writeFileSync(f, text, 'utf8');
-    
-    // Méthode: notepad /p (impression silencieuse)
-    const cmd = `notepad /p "${f}"`;
-    
-    exec(cmd, { timeout: 30000 }, (err) => {
-      setTimeout(() => {
-        try { fs.unlinkSync(f); } catch(e){}
-      }, 5000);
-      
-      if (err) {
-        reject(err);
-      } else {
-        resolve(true);
-      }
+    exec(`notepad /p "${f}"`, { timeout: 30000 }, (err) => {
+      setTimeout(() => { try { fs.unlinkSync(f); } catch(e){} }, 5000);
+      err ? reject(err) : resolve(true);
     });
   });
 }
 
 async function printOrder(order) {
   console.log(`[${new Date().toLocaleTimeString()}] #${order.orderId}...`);
-  
-  // Ticket CUISINE
-  await printText(generateKitchenTicket(order));
+  await printText(ticketCuisine(order));
   await new Promise(r => setTimeout(r, 2000));
-  
-  // Ticket CAISSE
-  await printText(generateCashierTicket(order));
-  
+  await printText(ticketCaisse(order));
   console.log(`[${new Date().toLocaleTimeString()}] #${order.orderId} OK`);
 }
 
@@ -257,10 +149,7 @@ app.post('/print', async (req, res) => {
   const { secret, order } = req.body;
   if (secret !== SECRET_KEY) return res.status(401).json({ error: 'Unauthorized' });
   if (!order?.orderId) return res.status(400).json({ error: 'Missing order' });
-  if (alreadyPrinted(order.orderId)) {
-    console.log(`[DOUBLON] #${order.orderId}`);
-    return res.json({ success: true, duplicate: true });
-  }
+  if (alreadyPrinted(order.orderId)) return res.json({ success: true, duplicate: true });
   const success = await addToQueue(order);
   res.json({ success, orderId: order.orderId });
 });
@@ -270,12 +159,12 @@ app.get('/health', (req, res) => res.json({ status: 'ok', queue: printQueue.leng
 app.get('/test', async (req, res) => {
   const id = Date.now().toString().slice(-4);
   const order = {
-    orderId: id, orderType: 'delivery', paymentMethod: 'cash', totalAmount: 2200,
+    orderId: id, orderType: 'delivery', paymentMethod: 'cash', totalAmount: 2700,
     createdAt: new Date().toISOString(),
     items: [
-      { name: 'Menu Tacos 2 viandes', quantity: 1, unitPrice: 1100, description: 'Merguez, Cordon bleu, Hannibal, Cheddar' },
-      { name: 'Menu Double Woping', quantity: 1, unitPrice: 1000, description: 'Hannibal, Nature' },
-      { name: 'Coca Cherry 33cl', quantity: 1, unitPrice: 100 },
+      { name: 'Tacos 2 viandes', quantity: 1, unitPrice: 1100, description: 'Merguez, Cordon bleu' },
+      { name: 'Double Woping', quantity: 1, unitPrice: 1000, description: 'Hannibal, Nature' },
+      { name: 'Coca 33cl', quantity: 1, unitPrice: 100 },
     ],
     customerInfo: { 
       firstName: 'Mohamed', lastName: 'Dupont', phone: '06 12 34 56 78',
@@ -283,31 +172,11 @@ app.get('/test', async (req, res) => {
       notes: 'Digicode 1234' 
     }
   };
-  if (alreadyPrinted(id)) return res.send('Doublon - Relance le serveur pour retester');
+  if (alreadyPrinted(id)) return res.send('Doublon');
   const ok = await addToQueue(order);
-  res.send(ok ? 'OK - Tickets imprimes!' : 'ERREUR');
+  res.send(ok ? 'OK!' : 'ERREUR');
 });
 
-app.get('/', (req, res) => res.send(`
-  <html>
-  <body style="font-family:Arial;padding:40px;background:#1a1a1a;color:white;text-align:center">
-    <h1>DWICH62 Printer</h1>
-    <p style="color:#10b981">EN LIGNE</p>
-    <p>Imprimante: ${PRINTER_NAME}</p>
-    <br>
-    <a href="/test" style="background:#10b981;color:white;padding:15px 30px;text-decoration:none;border-radius:8px;font-size:18px">IMPRIMER UN TEST</a>
-  </body>
-  </html>
-`));
+app.get('/', (req, res) => res.send('<h1>DWICH62</h1><a href="/test">TEST</a>'));
 
-app.listen(PORT, () => {
-  console.log('');
-  console.log('================================');
-  console.log('  DWICH62 - Serveur Impression');
-  console.log('================================');
-  console.log(`  Imprimante: ${PRINTER_NAME}`);
-  console.log(`  Port: ${PORT}`);
-  console.log(`  Test: http://localhost:${PORT}/test`);
-  console.log('================================');
-  console.log('');
-});
+app.listen(PORT, () => console.log(`DWICH62 Printer - Port ${PORT}`));
